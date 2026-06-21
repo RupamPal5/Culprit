@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Code Editor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: 'hsl(222.2 84% 4.9%)',
+            foreground: 'hsl(210 40% 98%)',
+            card: 'hsl(222.2 84% 4.9%)',
+            border: 'hsl(217.2 32.6% 17.5%)',
+            muted: 'hsl(217.2 32.6% 17.5%)',
+            'muted-foreground': 'hsl(215 20.2% 65.1%)',
+            primary: 'hsl(210 40% 98%)',
+            'primary-foreground': 'hsl(222.2 47.4% 11.2%)',
+            accent: 'hsl(217.2 32.6% 17.5%)',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    .editor-container { background: #1e1e1e; }
+  </style>
+</head>
+<body class="bg-background text-foreground h-full">
+  <div id="app" class="flex h-screen">
+    <!-- Chat Sidebar -->
+    <div class="w-80 border-r border-border bg-card flex flex-col">
+      <div class="p-3 border-b border-border font-semibold text-sm">AI Assistant</div>
+      <div id="messages" class="flex-1 p-3 space-y-3 overflow-auto"></div>
+      <form id="chat-form" class="p-3 border-t border-border flex gap-2">
+        <input id="message-input" type="text" placeholder="Describe your app..." 
+          class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none" />
+        <button type="submit" id="send-btn" 
+          class="inline-flex items-center justify-center rounded-md bg-primary text-primary-foreground h-10 px-4 hover:bg-primary/90">
+          ➤
+        </button>
+      </form>
+    </div>
+
+    <!-- File Explorer -->
+    <div class="w-64 border-r border-border bg-card flex flex-col">
+      <div class="p-3 border-b border-border font-semibold text-sm">Explorer</div>
+      <div id="file-list" class="flex-1 p-2 overflow-auto"></div>
+    </div>
+
+    <!-- Main Editor Area -->
+    <main class="flex-1 flex flex-col min-w-0">
+      <header class="h-12 border-b border-border flex items-center px-4 justify-between">
+        <h1 class="font-semibold text-sm">AI Code Editor</h1>
+        <span id="status" class="text-xs text-muted-foreground">Ready</span>
+      </header>
+      <div class="flex-1 p-4 overflow-auto editor-container rounded-lg m-4">
+        <textarea id="code-editor" 
+          class="w-full h-full bg-transparent text-gray-100 font-mono text-sm resize-none focus:outline-none p-4"
+          placeholder="Select a file or ask AI to create code..."></textarea>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const state = { messages: [], files: [], activeFileId: null };
+    const messagesEl = document.getElementById('messages');
+    const fileListEl = document.getElementById('file-list');
+    const codeEditor = document.getElementById('code-editor');
+    const messageInput = document.getElementById('message-input');
+    const sendBtn = document.getElementById('send-btn');
+    const statusEl = document.getElementById('status');
+
+    function renderMessages() {
+      messagesEl.innerHTML = state.messages.map(m => 
+        `<div class="p-2 rounded-md text-sm ${m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-muted'}">${m.content}</div>`
+      ).join('') || '<div class="text-xs text-muted-foreground">Ask me to create any app!</div>';
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function renderFiles() {
+      fileListEl.innerHTML = state.files.map(f => 
+        `<div class="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm cursor-pointer hover:bg-accent ${state.activeFileId === f.id ? 'bg-accent' : ''}" 
+          onclick="selectFile('${f.id}')">
+          📄 <span>${f.name}</span>${f.isDirty ? '<span class="ml-auto text-xs text-muted-foreground">●</span>' : ''}
+        </div>`
+      ).join('') || '<div class="text-xs text-muted-foreground p-2">No files yet. Ask AI to create some!</div>';
+    }
+
+    function selectFile(id) {
+      const file = state.files.find(f => f.id === id);
+      if (file) {
+        state.activeFileId = id;
+        codeEditor.value = file.content;
+        renderFiles();
+      }
+    }
+
+    codeEditor.addEventListener('input', (e) => {
+      if (state.activeFileId) {
+        const file = state.files.find(f => f.id === state.activeFileId);
+        if (file) {
+          file.content = e.target.value;
+          file.isDirty = true;
+          renderFiles();
+        }
+      }
+    });
+
+    document.getElementById('chat-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const message = messageInput.value.trim();
+      if (!message) return;
+
+      state.messages.push({ id: crypto.randomUUID(), role: 'user', content: message, timestamp: new Date() });
+      messageInput.value = '';
+      renderMessages();
+      sendBtn.disabled = true;
+      statusEl.textContent = 'Thinking...';
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message }),
+        });
+        const data = await res.json();
+        
+        state.messages.push({ id: crypto.randomUUID(), role: 'assistant', content: data.response, timestamp: new Date() });
+        if (data.files && data.files.length > 0) {
+          data.files.forEach(f => {
+            const existing = state.files.find(x => x.path === f.path);
+            if (existing) {
+              existing.content = f.content;
+              existing.isDirty = false;
+            } else {
+              state.files.push({
+                id: crypto.randomUUID(),
+                path: f.path,
+                name: f.path.split('/').pop(),
+                content: f.content,
+                isDirty: false,
+                createdAt: new Date(),
+                updatedAt: new Date()
+              });
+            }
+          });
+          if (!state.activeFileId && state.files.length > 0) {
+            selectFile(state.files[0].id);
+          }
+        }
+        renderMessages();
+        renderFiles();
+        statusEl.textContent = 'Ready';
+      } catch (err) {
+        state.messages.push({ id: crypto.randomUUID(), role: 'assistant', content: 'Error: Could not reach server.', timestamp: new Date() });
+        renderMessages();
+        statusEl.textContent = 'Error';
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+
+    // Initial render
+    renderMessages();
+    renderFiles();
+  </script>
+</body>
+</html>
